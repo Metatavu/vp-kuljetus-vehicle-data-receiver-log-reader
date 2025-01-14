@@ -11,6 +11,8 @@ This should be saved into `/usr/local/bin/vp-kuljetus-vehicle-data-receiver-log-
 # Following script can be used to read the logs directly from the current Kubernetes pod (assuming there's only one instance)
 # This script should be saved to /usr/local/bin/vp-logs.sh and made executable with chmod +x /usr/local/bin/vp-logs.sh
 # Usage: <vp-logs IMEI> <namespace:defaults to staging>
+#!/bin/sh
+
 if [ -z "$1" ]
   then
     echo "No IMEI supplied!"
@@ -19,16 +21,20 @@ if [ -z "$1" ]
 fi
 
 IMEI=$1
-NAMESPACE=$2
+DATE=$2
+NAMESPACE=$3
 
-if [ -z "$2" ]
+if [ -z "$3" ]
   then
     NAMESPACE="staging"
 fi
 
-DATE=$(date +%F)
+if [ -z "$2" ]
+  then
+    DATE=$(date +%F)
+fi
+
 POD_NAME=$(kubectl -n $NAMESPACE get pods -o=json | jq '. | .items[] | .metadata.name | select(startswith("transport-management-vehicle-data-receiver"))' | sed -E 's/\"//g')
-OUTPUT_PATH=$(pwd)/$IMEI-$DATE
 
 kubectl -n $NAMESPACE exec -it $POD_NAME -- cat /opt/telematic-data/$IMEI/$DATE.txt | vp-kuljetus-vehicle-data-receiver-log-reader
 
