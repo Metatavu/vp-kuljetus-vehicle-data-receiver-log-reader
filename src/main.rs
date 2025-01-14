@@ -100,6 +100,6 @@ fn main() -> Result<(), std::io::Error> {
     serde_json::to_writer_pretty(&mut output_writer, &frames)?;
     output_writer.flush()?;
 
-    println!("Wrote {} records to {}", records.len(), output_dir.display());
+    println!("Wrote {} records to {}", records.len(), "vp-kuljetus-logs");
     Ok(())
 }
