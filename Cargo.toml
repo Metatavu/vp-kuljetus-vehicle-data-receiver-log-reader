@@ -8,5 +8,6 @@ edition = "2021"
 [dependencies]
 base64 = "0.22.0"
 chrono = "0.4.38"
+clap = { version = "4.5.26", features = ["derive"] }
 nom-teltonika = { version = "0.1.5", features = ["serde"] }
 serde_json = "1.0.115"

@@ -1,8 +1,10 @@
-use std::{fs::{create_dir_all, OpenOptions}, io::{BufWriter, Write}, path::Path};
-
-use base64::Engine;
+use std::{fs::{create_dir_all, read_to_string, File}, io::{stdin, BufWriter, IsTerminal, Read, Write}, path::Path};
+use base64::{prelude::BASE64_STANDARD, Engine};
+use clap::{arg, command, Parser};
 use nom_teltonika::AVLFrame;
-use chrono::Timelike;
+use chrono::{Local, Timelike};
+
+const LOGS_FILE_NAME: &str = "frames.json";
 
 /// [VP-Kuljetus Vehicle Data Receiver](https://www.github.com/metatavu/vp-kuljetus-vehicle-data-receiver) can be configured to write all incoming [`AVLFrame`]s to a file.
 ///
@@ -20,33 +22,56 @@ use chrono::Timelike;
 ///     ├── {hour}:{minute}:{second}.{millisecond}.json
 ///  |--- input.json
 /// ```
+
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Args {
+    #[arg(short, long)]
+    output: Option<String>,
+    #[arg(short, long)]
+    input: Option<String>,
+}
 fn main() -> Result<(), std::io::Error> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        panic!("Usage: cargo run <filename>");
-    }
-    let input_filename = &args[1];
-    let input_file_contents = std::fs::read_to_string(input_filename)?;
-    let output_dirname = input_filename.replace(".txt", "");
-    create_dir_all(output_dirname.clone())?;
-    let output_filename = Path::new(&output_dirname).join(input_filename.replace(".txt", ".json"));
-    let output_file = std::fs::File::create(&output_filename)?;
+    let args = Args::parse();
 
-    let mut output_writer = BufWriter::new(output_file);
+    let now = Local::now();
+    let default_output_dir = format!("vp-kuljetus-logs/{}", now.format("%Y-%m-%d-%H-%M-%S"));
 
-    let encoded_frames: Vec<&str> = input_file_contents.trim_start().split("\\n").filter(|x| !x.is_empty()).collect();
+    let output_dir = args.output.unwrap_or_else(|| default_output_dir);
+    let output_dir = Path::new(&output_dir);
+
+    create_dir_all(output_dir)?;
+
+    let input_contents = match args.input {
+        Some(file_name) => read_to_string(file_name),
+        None => {
+            if stdin().is_terminal() {
+                panic!("No input file provided and no input detected from stdin");
+            }
+            let mut buffer = Vec::new();
+            stdin().lock().read_to_end(&mut buffer)?;
+            Ok(String::from_utf8(buffer).unwrap())
+        }
+    };
+    let input_contents = match input_contents  {
+        Ok(input_contents) => input_contents,
+        Err(error) => panic!("Error reading input: {:?}", error)
+    };
 
     let mut frames = Vec::new();
     let mut records = Vec::new();
 
-    for encoded_frame in encoded_frames.iter() {
-        let decoded_frame = match base64::prelude::BASE64_STANDARD.decode(encoded_frame) {
+    let encoded_frames = input_contents.trim_start().split("\\n").filter(|x| !x.is_empty());
+
+    for encoded_frame in encoded_frames {
+        let decoded_frame = match BASE64_STANDARD.decode(encoded_frame) {
             Ok(decoded) => decoded,
             Err(e) => {
                 eprintln!("Error decoding frame: {:?}", e);
                 continue;
             }
         };
+
         match serde_json::from_slice::<AVLFrame>(&decoded_frame) {
             Ok(frame) => {
                 records.append(&mut frame.records.clone());
@@ -59,19 +84,22 @@ fn main() -> Result<(), std::io::Error> {
         }
     }
 
-    records.iter().for_each(|record| {
-        let dirname = output_dirname.clone();
+    for record in &records {
         let hour = record.timestamp.hour();
-        let filename = record.timestamp.format("%H:%M:%S.%3f").to_string();
-        let record_dir_path = format!("{}/{}", dirname, hour);
-        let record_file_path = format!("{}/{}.json", record_dir_path, filename);
+        let filename = Path::new(&record.timestamp.format("%H:%M:%S.%3f").to_string()).with_extension("json");
+        let record_dir_path = output_dir.join(&hour.to_string());
+        let record_file_path = record_dir_path.join(&filename);
         create_dir_all(record_dir_path).unwrap();
-        let mut file = OpenOptions::new().create(true).write(true).open(record_file_path).unwrap();
-        file.write(serde_json::to_string_pretty(record).unwrap().as_bytes()).unwrap();
-    });
+        let mut file = File::create(record_file_path).unwrap();
+        file.write(serde_json::to_string_pretty(&record).unwrap().as_bytes()).unwrap();
+    };
+
+    let output_file = File::create(output_dir.join(LOGS_FILE_NAME))?;
+    let mut output_writer = BufWriter::new(output_file);
 
     serde_json::to_writer_pretty(&mut output_writer, &frames)?;
     output_writer.flush()?;
 
+    println!("Wrote {} records to {}", records.len(), output_dir.display());
     Ok(())
 }
